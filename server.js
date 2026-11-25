@@ -5,6 +5,7 @@ import multer from "multer";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { visitorAppearance, GESTURE_DURATION } from "./src/visitorConfig.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -108,7 +109,7 @@ app.get("/api/museums/:id", (req, res) => {
 const rooms = new Map();
 const colors = ["#a0ad87", "#d5a28c", "#a4b6c2", "#c6afd0"];
 io.on("connection", (socket) => {
-  socket.on("join", ({ id, name }, ack) => {
+  socket.on("join", ({ id, name, avatar }, ack) => {
     if (socket.data.room) return;
     if (!readMuseum(id)) return ack?.({ error: "Museum not found." });
     const room = rooms.get(id) || new Map();
@@ -120,8 +121,17 @@ io.on("connection", (socket) => {
     const person = {
       id: socket.id,
       name: String(name || "Guest").slice(0, 24),
-      color: colors.find((c) => !usedColors.includes(c)),
-      x: (room.size - 1.5) * 0.7,
+      ...visitorAppearance(
+        avatar,
+        colors.find((c) => !usedColors.includes(c)) || colors[0],
+      ),
+      x:
+        [0, 1.1, -1.1, 2.2].find(
+          (x) =>
+            ![...room.values()].some(
+              (p) => Math.hypot(p.x - x, p.z - 22) < 0.8,
+            ),
+        ) ?? -2.2,
       z: 22,
       rotation: 0,
       pose: "standing",
@@ -136,7 +146,13 @@ io.on("connection", (socket) => {
   socket.on("move", (p) => {
     const room = rooms.get(socket.data.room),
       person = room?.get(socket.id);
-    if (!person || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return;
+    if (
+      !person ||
+      person.lockedUntil > Date.now() ||
+      !Number.isFinite(p.x) ||
+      !Number.isFinite(p.z)
+    )
+      return;
     Object.assign(person, {
       x: Math.max(-30, Math.min(30, p.x)),
       z: Math.max(-6, Math.min(100, p.z)),
@@ -167,6 +183,13 @@ io.on("connection", (socket) => {
     const target = room.get(a.target),
       placements = {};
     if (
+      GESTURE_DURATION[a.type] &&
+      (!target ||
+        target.id === person.id ||
+        [...room.values()].some((p) => p.lockedUntil > Date.now()))
+    )
+      return;
+    if (
       target &&
       target.id !== person.id &&
       ["hands", "kiss", "propose"].includes(a.type)
@@ -190,6 +213,10 @@ io.on("connection", (socket) => {
           pose: "standing",
         });
       }
+      person.lockedUntil = target.lockedUntil =
+        Date.now() + GESTURE_DURATION[a.type];
+      person.partnerId = target.id;
+      target.partnerId = person.id;
       placements[target.id] = { ...target };
       placements[person.id] = { ...person };
       io.to(socket.data.room).emit("people", [...room.values()]);
@@ -209,11 +236,21 @@ io.on("connection", (socket) => {
       room = rooms.get(id);
     if (room) {
       room.delete(socket.id);
+      for (const person of room.values())
+        if (person.partnerId === socket.id) {
+          person.lockedUntil = 0;
+          person.partnerId = null;
+        }
+      io.to(id).emit("interaction-end", { id: socket.id });
       if (!room.size) rooms.delete(id);
       else io.to(id).emit("people", [...room.values()]);
     }
   });
 });
+// API misses must not fall through to Vite / the production SPA's HTML page.
+app.use("/api", (req, res) =>
+  res.status(404).json({ error: "This museum API route could not be found." }),
+);
 app.use((err, req, res, next) =>
   res.status(400).json({
     error:

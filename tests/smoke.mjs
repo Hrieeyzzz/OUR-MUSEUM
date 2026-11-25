@@ -37,6 +37,17 @@ try {
   });
   page.setDefaultTimeout(60000);
   page.on("pageerror", (e) => errors.push(e.message));
+  await page.route("**/api/museums/0000000000000000", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "text/plain",
+      body: "The page could not be found",
+    }),
+  );
+  await page.goto("http://localhost:3000/?room=0000000000000000");
+  await page.getByText(/The museum server is unavailable/).waitFor();
+  assert.equal(await page.getByText(/Unexpected token/).count(), 0);
+  await page.unroute("**/api/museums/0000000000000000");
   await page.goto("http://localhost:3000");
   await page
     .getByRole("button", { name: "Create your museum", exact: true })
@@ -57,13 +68,11 @@ try {
   await page
     .getByPlaceholder("Will you keep making memories with me?")
     .fill("Always and forever?");
-  await page
-    .locator('input[type="file"][accept^="audio/"]')
-    .setInputFiles({
-      name: "room-tone.wav",
-      mimeType: "audio/wav",
-      buffer: testSong(),
-    });
+  await page.locator('input[type="file"][accept^="audio/"]').setInputFiles({
+    name: "room-tone.wav",
+    mimeType: "audio/wav",
+    buffer: testSong(),
+  });
   await page
     .getByRole("button", { name: "Open the doors", exact: true })
     .click();
@@ -102,6 +111,21 @@ try {
   );
   await page.getByRole("button", { name: "Play music", exact: true }).click();
   await page.getByRole("button", { name: "Mute music", exact: true }).waitFor();
+  // The requested default is a head-mounted view, without our own head clipping it.
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".museum-canvas")?.dataset.cameraMode === "first",
+  );
+  assert.equal(
+    await page
+      .locator(".museum-canvas")
+      .getAttribute("data-local-avatar-visible"),
+    "false",
+  );
+  assert.equal(
+    await page.locator(".museum-canvas").getAttribute("data-avatar-count"),
+    "1",
+  );
   const projectionCamera = new THREE.PerspectiveCamera(
     65,
     1100 / 800,

@@ -40,11 +40,13 @@ function event(s, name, predicate = () => true) {
     s.on(name, listener);
   });
 }
-async function join(id, name) {
+async function join(id, name, avatar) {
   const s = io(base, { transports: ["websocket"], reconnection: false });
   clients.push(s);
   await event(s, "connect");
-  const result = await s.timeout(5000).emitWithAck("join", { id, name });
+  const result = await s
+    .timeout(5000)
+    .emitWithAck("join", { id, name, avatar });
   return { s, result };
 }
 
@@ -65,6 +67,10 @@ test("Museum API, uploads, and live four-person rooms", async (t) => {
         });
         assert.equal(r.status, 400);
       }
+      const unknown = await fetch(base + "/api/not-a-route");
+      assert.equal(unknown.status, 404);
+      assert.match(unknown.headers.get("content-type"), /application\/json/);
+      assert.ok((await unknown.json()).error);
       const notFound = await fetch(base + "/api/museums/not-a-room");
       assert.equal(notFound.status, 404);
     });
@@ -120,11 +126,19 @@ test("Museum API, uploads, and live four-person rooms", async (t) => {
     await t.test(
       "limits attendance, syncs movement, chat, gestures, and hearts",
       async () => {
-        const a = await join(museum.id, "Alex"),
+        const a = await join(museum.id, "Alex", {
+            color: "#a0ad87",
+            hair: "long",
+          }),
           b = await join(museum.id, "Sam");
         await join(museum.id, "Riya");
         const d = await join(museum.id, "Noor");
         assert.equal(d.result.people.length, 4);
+        assert.equal(
+          d.result.people.find((p) => p.id === a.result.id).hair,
+          "long",
+        );
+        assert.equal(new Set(d.result.people.map((p) => p.x)).size, 4);
         assert.equal(new Set(d.result.people.map((p) => p.color)).size, 4);
         const fifth = await join(museum.id, "Fifth");
         assert.match(fifth.result.error, /full/);
@@ -147,11 +161,21 @@ test("Museum API, uploads, and live four-person rooms", async (t) => {
         const yes = await hearts;
         assert.equal(yes.type, "yes");
         assert.equal(yes.name, "Sam");
+        let leakedMove = false;
+        b.s.on("move", () => {
+          leakedMove = true;
+        });
+        a.s.emit("move", { x: 28, z: 99, rotation: 0 });
         const video = event(b.s, "action", (a) => a.type === "video");
         a.s.emit("action", { type: "video", playing: true, time: 12 });
         const play = await video;
         assert.equal(play.time, 12);
         assert.equal(play.playing, true);
+        assert.equal(
+          leakedMove,
+          false,
+          "gesture placement must not be overwritten by stale movement",
+        );
         const left = event(a.s, "people");
         d.s.disconnect();
         assert.equal((await left).length, 3);

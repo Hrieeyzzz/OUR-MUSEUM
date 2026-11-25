@@ -36,6 +36,7 @@ import {
   Move,
   MousePointer2,
   DoorOpen,
+  Camera,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import "@fontsource/cormorant-garamond/latin-400.css";
@@ -46,8 +47,14 @@ import "@fontsource/dm-sans/latin-400.css";
 import "@fontsource/dm-sans/latin-500.css";
 import "@fontsource/dm-sans/latin-600.css";
 import MuseumScene from "./MuseumScene";
+import { requestJson } from "./api.js";
 import { createMuseumSound } from "./MuseumSound";
 import { galleryDepth } from "./galleryLayout";
+import {
+  VISITOR_OUTFITS,
+  visitorAppearance,
+  GESTURE_DURATION,
+} from "./visitorConfig";
 import "./styles.css";
 
 const DEMO_PHOTOS = Array.from(
@@ -141,6 +148,56 @@ function Modal({ children, onClose, className = "", label }) {
     </div>
   );
 }
+function AvatarPicker({ value, onChange }) {
+  return (
+    <div className="avatar-picker">
+      <div
+        className="character-preview"
+        style={{ "--shirt": value.color }}
+        data-hair={value.hair}
+        aria-label="Your character preview"
+      >
+        <i className="preview-hair" />
+        <i className="preview-face" />
+        <i className="preview-shirt" />
+        <i className="preview-legs" />
+      </div>
+      <div className="avatar-options">
+        <span className="field-label">Your character</span>
+        <div
+          className="outfit-options"
+          role="group"
+          aria-label="Character outfit"
+        >
+          {VISITOR_OUTFITS.map((outfit) => (
+            <button
+              type="button"
+              key={outfit.color}
+              style={{ background: outfit.color }}
+              aria-label={outfit.name + " outfit"}
+              aria-pressed={value.color === outfit.color}
+              onClick={() => onChange({ ...value, color: outfit.color })}
+            >
+              {value.color === outfit.color && <Check size={12} />}
+            </button>
+          ))}
+        </div>
+        <div className="hair-options" role="group" aria-label="Character hair">
+          {["short", "long"].map((hair) => (
+            <button
+              type="button"
+              key={hair}
+              aria-pressed={value.hair === hair}
+              onClick={() => onChange({ ...value, hair })}
+            >
+              {hair === "short" ? "Short hair" : "Long hair"}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 function App() {
   const [view, setView] = useState("home"),
     [museum, setMuseum] = useState(DEMO),
@@ -148,6 +205,15 @@ function App() {
     [collection, setCollection] = useState(false),
     [join, setJoin] = useState(null),
     [name, setName] = useState(""),
+    [visitorAvatar, setVisitorAvatar] = useState(() => {
+      try {
+        return visitorAppearance(
+          JSON.parse(localStorage.getItem("museum-visitor") || "null"),
+        );
+      } catch {
+        return visitorAppearance(null);
+      }
+    }),
     [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [toast, setToast] = useState("");
@@ -174,9 +240,7 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/museums/" + id);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
+      const data = await requestJson("/api/museums/" + encodeURIComponent(id));
       setJoin(data);
       setCollection(false);
     } catch (e) {
@@ -185,13 +249,18 @@ function App() {
       setLoading(false);
     }
   }
-  function enter(data, guestName) {
+  function enter(data, guestName, appearance = visitorAvatar) {
     soundtrackRef.current?.dispose();
     soundtrackRef.current = data.song
       ? createMuseumSound(data.song, galleryDepth(data.photos.length))
       : null;
     soundtrackRef.current?.play();
-    setMuseum({ ...data, guestName: guestName || "You" });
+    localStorage.setItem("museum-visitor", JSON.stringify(appearance));
+    setMuseum({
+      ...data,
+      guestName: guestName || "You",
+      visitorAvatar: appearance,
+    });
     setView("gallery");
     setJoin(null);
     if (data.id !== "demo") history.replaceState({}, "", "?room=" + data.id);
@@ -317,7 +386,7 @@ function App() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (name.trim()) enter(join, name.trim());
+              if (name.trim()) enter(join, name.trim(), visitorAvatar);
             }}
           >
             <label className="field-label" htmlFor="guest-name">
@@ -332,6 +401,7 @@ function App() {
               required
               autoComplete="given-name"
             />
+            <AvatarPicker value={visitorAvatar} onChange={setVisitorAvatar} />
             <button className="button primary full" type="submit">
               Step inside <ArrowRight size={18} />
             </button>
@@ -731,9 +801,11 @@ function Builder({ onClose, onCreated, notify }) {
       if (song) form.append("files", song);
       let uploaded = [];
       if ([...form.keys()].length) {
-        const r = await fetch("/api/upload", { method: "POST", body: form });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error);
+        const d = await requestJson(
+          "/api/upload",
+          { method: "POST", body: form },
+          "upload",
+        );
         uploaded = d.files;
         if (
           uploaded.length !==
@@ -747,7 +819,7 @@ function Builder({ onClose, onCreated, notify }) {
       const urls = photos.map((p) => (p.file ? uploaded[i++].url : p.url));
       const videoUrl = video ? uploaded[i++].url : "",
         songUrl = song ? uploaded[i++].url : "";
-      const r = await fetch("/api/museums", {
+      const m = await requestJson("/api/museums", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -759,8 +831,6 @@ function Builder({ onClose, onCreated, notify }) {
           song: songUrl,
         }),
       });
-      const m = await r.json();
-      if (!r.ok) throw new Error(m.error);
       onCreated(m);
     } catch (e) {
       setError(
@@ -1115,6 +1185,8 @@ function Gallery({
     [chat, setChat] = useState(""),
     [unread, setUnread] = useState(0),
     [seat, setSeat] = useState(false),
+    [cameraMode, setCameraMode] = useState("first"),
+    [partnerPicker, setPartnerPicker] = useState(null),
     [audioStatus, setAudioStatus] = useState(soundtrack?.state || "idle"),
     [photo, setPhoto] = useState(null),
     [screen, setScreen] = useState(false),
@@ -1136,7 +1208,8 @@ function Gallery({
   const localPerson = {
       id: myId,
       name: museum.guestName || "You",
-      color: "#a0ad87",
+      ...visitorAppearance(museum.visitorAvatar),
+      ...people.find((person) => person.id === myId),
     },
     visitors = people.length ? people : [localPerson];
   useEffect(() => {
@@ -1147,7 +1220,11 @@ function Gallery({
       setStatus("connecting");
       s.emit(
         "join",
-        { id: museum.id, name: museum.guestName || "Guest" },
+        {
+          id: museum.id,
+          name: museum.guestName || "Guest",
+          avatar: museum.visitorAvatar,
+        },
         (result) => {
           if (result.error) {
             setConnectionError(result.error);
@@ -1162,6 +1239,14 @@ function Gallery({
       );
     });
     s.on("people", setPeople);
+    s.on("interaction-end", ({ id }) => {
+      setAction((old) =>
+        old && (old.actor === id || old.target === id) ? null : old,
+      );
+      setGesture((old) =>
+        old && (old.actor === id || old.target === id) ? null : old,
+      );
+    });
     s.on("move", (p) =>
       setPeople((prev) => prev.map((old) => (old.id === p.id ? p : old))),
     );
@@ -1271,7 +1356,9 @@ function Gallery({
     };
     setGesture({ ...a, text: `${a.name} ${verbs[a.type]}` });
     if (a.type === "kiss") setHearts((n) => n + 1);
-    timers.current.push(setTimeout(() => setGesture(null), 6500));
+    timers.current.push(
+      setTimeout(() => setGesture(null), GESTURE_DURATION[a.type] || 6500),
+    );
   }
   function sendAction(type, target) {
     const a = { type, target, actor: myId, name: museum.guestName || "You" };
@@ -1279,29 +1366,35 @@ function Gallery({
     else performAction(a);
   }
   function interact(type) {
-    setSeat(false);
-    const other = people.find((p) => p.id !== myId);
-    if (!other) {
+    const others = people.filter((p) => p.id !== myId);
+    if (!others.length) {
       notify(
-        "A gesture is better shared. Invite someone into your little world first.",
+        "Invite someone to join your character, then share a little gesture together.",
       );
       setInvite(true);
       return;
     }
-    sendAction(type, other.id);
+    setSeat(false);
+    if (others.length > 1) {
+      setPartnerPicker(type);
+      return;
+    }
+    sendAction(type, others[0].id);
   }
   async function createInvite() {
     if (museum.id !== "demo") return museum;
     setCreating(true);
     try {
-      const r = await fetch("/api/museums", {
+      const data = await requestJson("/api/museums", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(DEMO),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error);
-      const m = { ...data, guestName: museum.guestName || "You" };
+      const m = {
+        ...data,
+        guestName: museum.guestName || "You",
+        visitorAvatar: museum.visitorAvatar,
+      };
       setMuseum(m);
       onSave(m);
       history.replaceState({}, "", "?room=" + m.id);
@@ -1339,7 +1432,25 @@ function Gallery({
     }
     setChat("");
   }
-  const blockMove = photo !== null || invite || screen || help || !!exhibit;
+  const blockMove =
+    photo !== null || invite || screen || help || !!exhibit || !!partnerPicker;
+  useEffect(() => {
+    const key = (e) => {
+      if (
+        e.key.toLowerCase() === "v" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !blockMove &&
+        !["INPUT", "TEXTAREA"].includes(e.target.tagName)
+      ) {
+        e.preventDefault();
+        setCameraMode((mode) => (mode === "third" ? "first" : "third"));
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [blockMove]);
   return (
     <div className="gallery-app">
       <MuseumScene
@@ -1349,6 +1460,8 @@ function Gallery({
         question={museum.question}
         people={people}
         myId={myId}
+        localPerson={localPerson}
+        cameraMode={cameraMode}
         onMove={(p) => !blockMove && socket.current?.emit("move", p)}
         onListen={(position, forward, up) =>
           soundtrack?.updateListener(position, forward, up)
@@ -1438,6 +1551,24 @@ function Gallery({
         </span>
         <ArrowUpRight size={17} />
       </button>
+      <button
+        className="camera-control"
+        onClick={() =>
+          setCameraMode((mode) => (mode === "third" ? "first" : "third"))
+        }
+        aria-label={
+          cameraMode === "third"
+            ? "Switch to first-person view"
+            : "Show my character"
+        }
+        title="Press V to switch views"
+      >
+        <Camera size={16} />
+        <span>
+          {cameraMode === "third" ? "Your character" : "First-person view"}
+        </span>
+        <kbd>V</kbd>
+      </button>
       <div className="gallery-hints">
         <span>
           <kbd>W</kbd>
@@ -1492,15 +1623,15 @@ function Gallery({
           <Armchair size={21} />
           <span>{seat ? "Stand up" : "Take a seat"}</span>
         </button>
-        <button onClick={() => interact("hands")}>
+        <button disabled={!!gesture} onClick={() => interact("hands")}>
           <Hand size={21} />
           <span>Hold hands</span>
         </button>
-        <button onClick={() => interact("kiss")}>
+        <button disabled={!!gesture} onClick={() => interact("kiss")}>
           <Heart size={21} />
           <span>A little kiss</span>
         </button>
-        <button onClick={() => interact("propose")}>
+        <button disabled={!!gesture} onClick={() => interact("propose")}>
           <Gem size={21} />
           <span>Ask forever</span>
         </button>
@@ -1604,7 +1735,7 @@ function Gallery({
             )}
           </span>
           <p>{gesture.text}</p>
-          {gesture.type === "propose" && (
+          {gesture.type === "propose" && gesture.target === myId && (
             <button
               className="button primary"
               onClick={() => {
@@ -1625,6 +1756,38 @@ function Gallery({
         </div>
       )}
       {hearts > 0 && <HeartRain key={hearts} />}
+      {partnerPicker && (
+        <Modal
+          label="Choose your partner"
+          className="partner-modal"
+          onClose={() => setPartnerPicker(null)}
+        >
+          <span className="eyebrow">A LITTLE CLOSER</span>
+          <h2>Who’s your person?</h2>
+          <p className="muted">
+            Choose the character you’d like to share this moment with.
+          </p>
+          <div className="partner-list">
+            {people
+              .filter((person) => person.id !== myId)
+              .map((person) => (
+                <button
+                  key={person.id}
+                  onClick={() => {
+                    sendAction(partnerPicker, person.id);
+                    setPartnerPicker(null);
+                  }}
+                >
+                  <span style={{ background: person.color }}>
+                    {person.name[0]}
+                  </span>
+                  <strong>{person.name}</strong>
+                  <ArrowRight size={17} />
+                </button>
+              ))}
+          </div>
+        </Modal>
+      )}
       {invite && (
         <Modal
           label="Invite your people"

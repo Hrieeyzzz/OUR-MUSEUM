@@ -4043,3 +4043,210 @@ textarea {
   letter-spacing: 0.6px;
   margin-bottom: 27px;
 }
+
+/* Visitors are part of the museum, not just a camera position. */
+.avatar-picker {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #dedfce;
+  border-radius: 8px;
+  background: #f0f0e7;
+  text-align: left;
+}
+.character-preview {
+  --shirt: #a0ad87;
+  position: relative;
+  flex: 0 0 65px;
+  height: 102px;
+  border-radius: 40%;
+  background: #e3e5d7;
+}
+.character-preview i {
+  position: absolute;
+  display: block;
+}
+.preview-face {
+  width: 23px;
+  height: 28px;
+  background: #d7b599;
+  top: 11px;
+  left: 21px;
+  border-radius: 45%;
+}
+.preview-hair {
+  width: 29px;
+  height: 21px;
+  background: #4c382d;
+  top: 7px;
+  left: 18px;
+  border-radius: 50% 50% 30% 30%;
+}
+[data-hair="long"] .preview-hair {
+  height: 43px;
+}
+.preview-shirt {
+  width: 34px;
+  height: 36px;
+  background: var(--shirt);
+  top: 37px;
+  left: 16px;
+  border-radius: 14px 14px 7px 7px;
+  box-shadow:
+    -7px 3px 0 -3px var(--shirt),
+    7px 3px 0 -3px var(--shirt);
+}
+.preview-legs {
+  top: 72px;
+  left: 22px;
+  width: 9px;
+  height: 23px;
+  background: #535649;
+  border-radius: 0 0 3px 3px;
+  box-shadow: 13px 0 #535649;
+}
+.avatar-options {
+  flex: 1;
+}
+.avatar-options .field-label {
+  font-size: 11px;
+}
+.outfit-options {
+  display: flex;
+  gap: 10px;
+  margin: 9px 0;
+}
+.outfit-options button {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  color: white;
+  display: grid;
+  place-items: center;
+}
+.outfit-options button[aria-pressed="true"] {
+  outline: 1px solid #64734d;
+  border-color: #f9f8ed;
+}
+.hair-options {
+  display: flex;
+  gap: 6px;
+}
+.hair-options button {
+  padding: 5px 8px;
+  font-size: 10px;
+  border: 1px solid #d5d8c6;
+  border-radius: 4px;
+}
+.hair-options button[aria-pressed="true"] {
+  background: #e0e4d2;
+  border-color: #8b9a75;
+}
+.camera-control {
+  position: absolute;
+  top: 115px;
+  left: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fcfbedab;
+  border-radius: 5px;
+  background: #f9f8edd9;
+  color: #727e5d;
+  backdrop-filter: blur(12px);
+  font-size: 11px;
+}
+.camera-control kbd {
+  font: 10px var(--sans);
+  border: 1px solid #cdd3be;
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+.gallery-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+/* Keep the action caption below the couple instead of covering their bodies. */
+.gesture-note {
+  top: auto;
+  bottom: 150px;
+  transform: translateX(-50%);
+  padding: 12px 32px 12px 18px;
+  min-width: 260px;
+  max-width: 430px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.gesture-note > span > svg {
+  width: 19px;
+  height: 19px;
+  margin: 0;
+}
+.gesture-note > p {
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.5;
+  flex: 1;
+  margin: 0;
+}
+.gesture-note > .button {
+  margin-top: 4px;
+  pointer-events: auto;
+}
+.gesture-note .gesture-close {
+  pointer-events: auto;
+}
+.partner-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+.partner-list button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid #dfe2d2;
+  border-radius: 6px;
+  text-align: left;
+}
+.partner-list button > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+}
+.partner-list strong {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+@media (max-width: 600px) {
+  .camera-control {
+    top: 102px;
+    left: 14px;
+    padding: 8px;
+    font-size: 10px;
+  }
+  .camera-control kbd {
+    display: none;
+  }
+  .gesture-note {
+    bottom: 172px;
+    width: min(320px, calc(100% - 32px));
+    padding: 10px 30px 10px 12px;
+  }
+  .gesture-note > p {
+    font-size: 11px;
+  }
+}

@@ -5,6 +5,13 @@ import { buildGrandGallery } from "./GrandGallery";
 import { buildLoveRotunda } from "./LoveRotunda";
 import { LOVE_ROTUNDA, galleryDepth, constrainLoveWalk } from "./galleryLayout";
 import { PHOTO_BAYS, photoPlacements, fitPhotoToMount } from "./photoLayout";
+import {
+  createVisitorAvatar,
+  poseVisitorAvatar,
+  disposeVisitorAvatar,
+} from "./VisitorAvatar";
+import { activeVisitorGesture } from "./visitorConfig";
+import { thirdPersonCamera, interactionCamera } from "./visitorCamera";
 
 const clamp = THREE.MathUtils.clamp;
 function labelTexture(
@@ -72,59 +79,6 @@ function labelTexture(
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
-function avatar(color, name) {
-  const g = new THREE.Group(),
-    clothes = new THREE.MeshStandardMaterial({ color }),
-    skin = new THREE.MeshStandardMaterial({ color: "#d7b599" });
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.22, 0.45, 5, 10),
-    clothes,
-  );
-  body.position.y = 1;
-  g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 16, 12), skin);
-  head.position.y = 1.59;
-  g.add(head);
-  const hair = new THREE.Mesh(
-    new THREE.SphereGeometry(0.194, 16, 12, 0, Math.PI * 2, 0, 1.5),
-    new THREE.MeshStandardMaterial({ color: "#594434" }),
-  );
-  hair.position.y = 1.62;
-  g.add(hair);
-  const limbs = [];
-  for (const x of [-0.13, 0.13]) {
-    const leg = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.075, 0.44, 3, 8),
-      new THREE.MeshStandardMaterial({ color: "#615e52" }),
-    );
-    leg.position.set(x, 0.4, 0);
-    g.add(leg);
-    limbs.push(leg);
-  }
-  for (const x of [-0.33, 0.33]) {
-    const arm = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.065, 0.42, 3, 8),
-      clothes,
-    );
-    arm.position.set(x, 1, 0);
-    g.add(arm);
-    limbs.push(arm);
-  }
-  const tag = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: labelTexture(name, "", "#464e3b", 512, 128),
-      depthTest: false,
-    }),
-  );
-  tag.scale.set(1.05, 0.26, 1);
-  tag.position.y = 2.1;
-  g.add(tag);
-  g.userData = { limbs, body, head, hair, tag };
-  g.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
-  });
-  return g;
-}
 export default function MuseumScene({
   photos,
   hero = false,
@@ -133,6 +87,8 @@ export default function MuseumScene({
   question = "",
   people = [],
   myId,
+  localPerson,
+  cameraMode = "first",
   onMove,
   onListen,
   onPhoto,
@@ -150,6 +106,8 @@ export default function MuseumScene({
   props.current = {
     people,
     myId,
+    localPerson,
+    cameraMode,
     onMove,
     onListen,
     onPhoto,
@@ -461,6 +419,14 @@ export default function MuseumScene({
         needsRender = true;
       });
     }
+    const player = new THREE.Vector3(
+      LOVE_ROTUNDA.spawn.x,
+      0,
+      LOVE_ROTUNDA.spawn.z,
+    );
+    let facing = 0,
+      lastMyId = null,
+      cameraInitialized = false;
     const avatars = new Map(),
       keys = new Set(),
       euler = new THREE.Euler(0, 0, 0, "YXZ");
@@ -469,13 +435,12 @@ export default function MuseumScene({
       pointer = null,
       last = performance.now(),
       lastNetwork = 0,
-      raf,
-      walkTime = 0;
+      raf;
     let walkTarget = null,
       wasSeated = false,
       lastAction = null,
       lastRender = 0,
-      lastShadow = 0;
+      lastSentPose = "";
     const keyDown = (e) => {
       if (
         props.current.paused ||
@@ -587,12 +552,22 @@ export default function MuseumScene({
       }
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
+      let avatarsAnimating = false;
       if (hero) {
         camera.position.set(7.2, 5.5, 23.8);
         camera.lookAt(-0.3, 2.9, 6.5);
       } else {
         const p = props.current;
-        if (p.paused) {
+        if (p.myId !== lastMyId) {
+          const joined = p.people.find((person) => person.id === p.myId);
+          if (joined) {
+            player.x = joined.x;
+            player.z = joined.z;
+          }
+          lastMyId = p.myId;
+        }
+        const participating = activeVisitorGesture(p.action, p.myId, now);
+        if (p.paused || participating) {
           keys.clear();
           walkTarget = null;
         }
@@ -608,32 +583,33 @@ export default function MuseumScene({
           const placement = p.action.placements?.[p.myId];
           if (placement) {
             placementApplied = true;
-            camera.position.x = placement.x;
-            camera.position.z = placement.z;
-            yaw = placement.rotation;
+            player.set(placement.x, 0, placement.z);
+            facing = placement.rotation;
+            yaw = facing;
             walkTarget = null;
           }
         }
         if (p.seat && !wasSeated) {
-          const guestIndex = Math.max(
+          const index = Math.max(
             0,
             p.people.findIndex((person) => person.id === p.myId),
           );
-          selectedSeat ||= seats[guestIndex % seats.length];
-          camera.position.set(selectedSeat.x, 1.3, selectedSeat.z);
+          selectedSeat ||= seats[index % seats.length];
+          player.set(selectedSeat.x, 0, selectedSeat.z);
           yaw = selectedSeat.yaw;
+          facing = yaw;
           pitch = selectedSeat.pitch;
           walkTarget = null;
         }
         if (!p.seat && wasSeated) {
           if (!placementApplied)
-            camera.position.set(selectedSeat.x, 1.7, selectedSeat.z - 1.05);
+            player.set(selectedSeat.x, 0, selectedSeat.z - 1.05);
           selectedSeat = null;
         }
         wasSeated = p.seat;
         let dx = 0,
           dz = 0;
-        if (!p.seat && !p.paused) {
+        if (!p.seat && !p.paused && !participating) {
           const input = p.movement || {};
           if (keys.has("w") || keys.has("arrowup") || input.up) dz -= 1;
           if (keys.has("s") || keys.has("arrowdown") || input.down) dz += 1;
@@ -641,15 +617,15 @@ export default function MuseumScene({
           if (keys.has("d") || keys.has("arrowright") || input.right) dx += 1;
           if (dx || dz) {
             walkTarget = null;
-            const len = Math.hypot(dx, dz);
-            dx /= len;
-            dz /= len;
+            const length = Math.hypot(dx, dz);
+            dx /= length;
+            dz /= length;
             const wx = dx * Math.cos(yaw) + dz * Math.sin(yaw);
             dz = -dx * Math.sin(yaw) + dz * Math.cos(yaw);
             dx = wx;
           } else if (walkTarget) {
-            const x = walkTarget.x - camera.position.x,
-              z = walkTarget.z - camera.position.z,
+            const x = walkTarget.x - player.x,
+              z = walkTarget.z - player.z,
               length = Math.hypot(x, z);
             if (length < 0.2) walkTarget = null;
             else {
@@ -657,162 +633,213 @@ export default function MuseumScene({
               dz = z / length;
             }
           }
-          let x = clamp(camera.position.x + dx * dt * 3.3, -8.3, 8.3),
-            z = clamp(camera.position.z + dz * dt * 3.3, -5, depth - 0.5);
-          const columnPositions = [-8.2, -3.15, 3.15, 8.2].map((cx) => [
-            cx,
-            -5.45,
-          ]);
+          let x = clamp(player.x + dx * dt * 3.3, -8.3, 8.3),
+            z = clamp(player.z + dz * dt * 3.3, -5, depth - 0.5);
+          const columns = [-8.2, -3.15, 3.15, 8.2].map((cx) => [cx, -5.45]);
           for (
             let cz = PHOTO_BAYS.firstColumn;
             cz < depth;
             cz += PHOTO_BAYS.spacing
-          ) {
-            columnPositions.push([-7.85, cz], [7.85, cz]);
-          }
-          for (const [cx, cz] of columnPositions) {
+          )
+            columns.push([-7.85, cz], [7.85, cz]);
+          for (const [cx, cz] of columns)
             if (Math.hypot(x - cx, z - cz) < 0.65) {
               const distance = Math.max(0.001, Math.hypot(x - cx, z - cz));
               x = cx + ((x - cx) / distance) * 0.66;
               z = cz + ((z - cz) / distance) * 0.66;
             }
-          }
           const constrained = constrainLoveWalk(
-            { x: camera.position.x, z: camera.position.z },
+            { x: player.x, z: player.z },
             { x, z },
           );
-          x = constrained.x;
-          z = constrained.z;
-          camera.position.x = x;
-          camera.position.z = z;
-          if (dx || dz) walkTime += dt * 9;
-          camera.position.y =
-            p.action?.type === "propose" &&
-            p.action.actor === p.myId &&
-            now - p.action.started < 6000
-              ? 1.03
-              : 1.7 + (dx || dz ? Math.sin(walkTime) * 0.018 : 0);
+          const moved =
+            Math.hypot(constrained.x - player.x, constrained.z - player.z) >
+            0.001;
+          player.x = constrained.x;
+          player.z = constrained.z;
+          if (moved) {
+            facing = Math.atan2(-dx, -dz);
+            avatarsAnimating = true;
+          } else {
+            dx = 0;
+            dz = 0;
+          }
         }
-        euler.set(pitch, yaw, 0);
-        camera.quaternion.setFromEuler(euler);
-        if (now - lastNetwork > 70) {
-          camera.getWorldDirection(listenerDirection);
-          listenerUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
-          p.onListen?.(camera.position, listenerDirection, listenerUp);
-          p.onMove?.({
-            x: camera.position.x,
-            z: camera.position.z,
-            rotation: yaw,
-            pose: p.seat ? "sitting" : "standing",
-          });
-          lastNetwork = now;
-        }
-        const activeIds = new Set();
-        p.people
-          .filter((person) => person.id !== p.myId)
-          .forEach((person) => {
-            activeIds.add(person.id);
-            let model = avatars.get(person.id);
-            if (!model) {
-              model = avatar(person.color, person.name);
-              scene.add(model);
-              avatars.set(person.id, model);
-              model.position.set(person.x, 0, person.z);
-            }
+        const ownServer = p.people.find((person) => person.id === p.myId);
+        const own = {
+          ...p.localPerson,
+          ...ownServer,
+          id: p.myId || "local",
+          name: p.localPerson?.name || ownServer?.name || "You",
+          x: player.x,
+          z: player.z,
+          rotation: facing,
+          pose: p.seat ? "sitting" : "standing",
+        };
+        const visitors = [
+          own,
+          ...p.people.filter((person) => person.id !== p.myId),
+        ];
+        const activeIds = new Set(visitors.map((person) => person.id));
+        for (const person of visitors) {
+          const local = person.id === own.id;
+          const key = [person.name, person.color, person.hair, local].join(":");
+          let model = avatars.get(person.id);
+          if (model && model.userData.appearanceKey !== key) {
+            disposeVisitorAvatar(model);
+            avatars.delete(person.id);
+            model = null;
+          }
+          if (!model) {
+            model = createVisitorAvatar(person, local);
+            model.position.set(person.x, 0, person.z);
+            model.rotation.y = person.rotation || 0;
+            scene.add(model);
+            avatars.set(person.id, model);
+            needsRender = true;
+          }
+          const previous = model.position.clone();
+          if (local) model.position.set(player.x, 0, player.z);
+          else {
+            const alpha = 1 - Math.exp(-dt * 14);
             model.position.x = THREE.MathUtils.lerp(
               model.position.x,
               person.x,
-              0.13,
+              alpha,
             );
             model.position.z = THREE.MathUtils.lerp(
               model.position.z,
               person.z,
-              0.13,
+              alpha,
             );
-            model.rotation.y = person.rotation;
-            const a = p.action,
-              performing =
-                a &&
-                now - a.started < 6000 &&
-                (a.actor === person.id || a.target === person.id);
-            model.position.y =
-              person.pose === "sitting"
-                ? 0
-                : performing && a.type === "propose" && a.actor === person.id
-                  ? -0.5
-                  : 0;
-            model.userData.limbs[2].rotation.z =
-              performing && a.type === "hands" ? -0.8 : 0;
-            model.userData.limbs[3].rotation.z =
-              performing && ["propose", "kiss"].includes(a.type) ? 0.95 : 0;
-            model.userData.limbs[0].rotation.x =
-              performing && a.type === "propose"
-                ? -1.3
-                : person.pose === "sitting"
-                  ? -1.4
-                  : 0;
-            if (performing && a.type === "kiss") model.rotation.x = -0.14;
-            else model.rotation.x = 0;
-            if (performing && a.type === "propose" && !model.userData.ring) {
-              const ring = box(
-                0.17,
-                0.12,
-                0.17,
-                new THREE.MeshStandardMaterial({ color: "#713d35" }),
-                -0.3,
-                1.15,
-                -0.3,
-                model,
-              );
-              const lid = box(
-                0.17,
-                0.025,
-                0.17,
-                new THREE.MeshStandardMaterial({ color: "#713d35" }),
-                0,
-                0.13,
-                -0.075,
-                ring,
-              );
-              lid.rotation.x = -0.85;
-              const band = new THREE.Mesh(
-                new THREE.TorusGeometry(0.03, 0.008, 8, 20),
-                gold,
-              );
-              band.position.y = 0.09;
-              ring.add(band);
-              const gem = new THREE.Mesh(
-                new THREE.OctahedronGeometry(0.025),
-                new THREE.MeshStandardMaterial({
-                  color: "#ffffff",
-                  metalness: 0.8,
-                  roughness: 0.1,
-                }),
-              );
-              gem.position.y = 0.1;
-              ring.add(gem);
-              model.userData.ring = ring;
-            }
-            if (model.userData.ring)
-              model.userData.ring.visible = performing && a.type === "propose";
-          });
-        avatars.forEach((m, id) => {
-          if (!activeIds.has(id)) {
-            scene.remove(m);
-            avatars.delete(id);
           }
-        });
-      }
-      if (!hero && props.current.people.length > 1 && now - lastShadow > 250) {
-        renderer.shadowMap.needsUpdate = true;
-        lastShadow = now;
+          const angle =
+            THREE.MathUtils.euclideanModulo(
+              (person.rotation || 0) - model.rotation.y + Math.PI,
+              Math.PI * 2,
+            ) - Math.PI;
+          model.rotation.y += angle * (local ? 0.3 : Math.min(1, dt * 14));
+          const moving = local
+            ? !!(dx || dz)
+            : model.position.distanceToSquared(previous) > 0.000003;
+          const performing = activeVisitorGesture(p.action, person.id, now);
+          let handTarget = null;
+          if (performing && p.action.type === "hands") {
+            const partner = visitors.find(
+              (other) =>
+                other.id ===
+                (p.action.actor === person.id
+                  ? p.action.target
+                  : p.action.actor),
+            );
+            if (partner) {
+              model.updateMatrixWorld(true);
+              handTarget = model.worldToLocal(
+                new THREE.Vector3(
+                  (person.x + partner.x) / 2,
+                  0.96,
+                  (person.z + partner.z) / 2 - 0.015,
+                ),
+              );
+            }
+          }
+          poseVisitorAvatar(model, {
+            pose: person.pose,
+            walking: moving && !performing,
+            phase: now * 0.009,
+            gesture: performing ? p.action.type : null,
+            actor: p.action?.actor === person.id,
+            handTarget,
+          });
+          // Keep your body/arms visible below eye level, but never render your own
+          // head or floating name in front of a head-mounted camera.
+          model.visible = true;
+          model.userData.rig.head.visible = !local || p.cameraMode !== "first";
+          model.userData.rig.tag.visible = !local || p.cameraMode !== "first";
+          const poseKey = [
+            person.pose,
+            moving,
+            performing ? p.action.type : "idle",
+            model.userData.rig.head.visible,
+          ].join(":");
+          if (model.userData.poseKey !== poseKey) {
+            needsRender = true;
+            model.userData.poseKey = poseKey;
+          }
+          if (moving || Math.abs(angle) > 0.002) avatarsAnimating = true;
+        }
+        for (const [id, model] of avatars)
+          if (!activeIds.has(id)) {
+            disposeVisitorAvatar(model);
+            avatars.delete(id);
+            needsRender = true;
+          }
+        const cinematic =
+          participating && p.cameraMode === "third"
+            ? interactionCamera(p.action, visitors, depth)
+            : null;
+        if (cinematic) {
+          camera.position.lerp(
+            cinematic.position,
+            cameraInitialized ? 1 - Math.exp(-dt * 7) : 1,
+          );
+          camera.lookAt(cinematic.target);
+        } else if (p.cameraMode === "first") {
+          const ownHead = avatars.get(own.id).userData.rig.head;
+          camera.position.set(player.x, ownHead.position.y + 0.04, player.z);
+          if (participating && p.action.type === "kiss") {
+            camera.position.x -= Math.sin(yaw) * 0.105;
+            camera.position.z -= Math.cos(yaw) * 0.105;
+          }
+          euler.set(pitch, yaw, 0);
+          camera.quaternion.setFromEuler(euler);
+        } else {
+          const follow = thirdPersonCamera(player, yaw, pitch, depth);
+          camera.position.lerp(
+            follow.position,
+            cameraInitialized ? 1 - Math.exp(-dt * 12) : 1,
+          );
+          camera.lookAt(follow.target);
+        }
+        cameraInitialized = true;
+        const setData = (key, value) => {
+          if (el.dataset[key] !== String(value))
+            el.dataset[key] = String(value);
+        };
+        setData("avatarCount", avatars.size);
+        setData(
+          "localAvatarVisible",
+          avatars.get(own.id)?.userData.rig.head.visible || false,
+        );
+        setData("cameraMode", cinematic ? "interaction" : p.cameraMode);
+        setData("interaction", participating ? p.action.type : "none");
+        if (now - lastNetwork > 70) {
+          camera.getWorldDirection(listenerDirection);
+          listenerUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+          p.onListen?.(
+            new THREE.Vector3(player.x, p.seat ? 1.3 : 1.7, player.z),
+            listenerDirection,
+            listenerUp,
+          );
+          const pose = {
+            x: player.x,
+            z: player.z,
+            rotation: facing,
+            pose: p.seat ? "sitting" : "standing",
+          };
+          const signature = JSON.stringify(pose);
+          if (signature !== lastSentPose) {
+            p.onMove?.(pose);
+            lastSentPose = signature;
+          }
+          lastNetwork = now;
+        }
       }
       const cameraChanged =
         lastCameraPosition.distanceToSquared(camera.position) > 0.000001 ||
         1 - Math.abs(lastCameraRotation.dot(camera.quaternion)) > 0.000001;
       const animated =
-        props.current.people.length > 1 ||
-        (galleryVideo && !galleryVideo.paused);
+        avatarsAnimating || (galleryVideo && !galleryVideo.paused);
       if (!props.current.paused && (needsRender || cameraChanged || animated)) {
         renderer.render(scene, camera);
         needsRender = false;
@@ -854,7 +881,15 @@ export default function MuseumScene({
     };
   }, [photos, hero, title, dedication, question, videoUrl]);
   return (
-    <div className={"museum-canvas " + (hero ? "hero-canvas" : "")} ref={host}>
+    <div
+      className={"museum-canvas " + (hero ? "hero-canvas" : "")}
+      ref={host}
+      aria-label={
+        hero
+          ? "Museum preview"
+          : `3D museum with your character and ${people.filter((person) => person.id !== myId).length} other guests`
+      }
+    >
       {failed && (
         <div className="canvas-fallback">
           <img src={photos[0]} alt="Your museum centrepiece" />
