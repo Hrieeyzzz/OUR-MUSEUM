@@ -1,0 +1,6 @@
+node_modules/
+dist/
+museum-data/
+.arena/
+.env
+image-search/
